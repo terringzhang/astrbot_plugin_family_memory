@@ -1,0 +1,215 @@
+{
+  "enabled": {
+    "description": "启用长期记忆；先完成平台及用户身份配置",
+    "type": "bool",
+    "default": false
+  },
+  "xiaoman_platform": {
+    "description": "OneBot 侧平台实例 ID（历史字段名，非人格名称）",
+    "type": "string",
+    "default": "default"
+  },
+  "xiaoman_self_id": {
+    "description": "OneBot 机器人的真实 self_id，必须填写；空值拒绝匹配",
+    "type": "string",
+    "default": ""
+  },
+  "elder_platform": {
+    "description": "第二侧 QQ 官方平台实例 ID；不用时填未使用的实例 ID",
+    "type": "string",
+    "default": "qq_official"
+  },
+  "elder_self_id": {
+    "description": "第二侧 self_id；可选严格校验，不要把 AppID 当成 self_id",
+    "type": "string",
+    "default": ""
+  },
+  "owner_qq_ids": {
+    "description": "经主人确认的QQ身份ID（不是昵称）",
+    "type": "list",
+    "default": []
+  },
+  "elder_owner_openids": {
+    "description": "姐姐入口经核实的主人OpenID",
+    "type": "list",
+    "default": []
+  },
+  "sister_binding": {
+    "description": "姐姐在OneBot侧的身份绑定",
+    "type": "object",
+    "items": {
+      "qq_id": {
+        "type": "string",
+        "default": "",
+        "description": "真实QQ身份"
+      },
+      "approved": {
+        "type": "bool",
+        "default": false,
+        "description": "已独立核实并由主人批准"
+      },
+      "evidence_ref": {
+        "type": "string",
+        "default": "",
+        "description": "身份核验证据引用，不填密钥"
+      }
+    }
+  },
+  "elder_peer_binding": {
+    "description": "小满在官方入口的身份绑定",
+    "type": "object",
+    "items": {
+      "openid": {
+        "type": "string",
+        "default": "",
+        "description": "真实OpenID"
+      },
+      "approved": {
+        "type": "bool",
+        "default": false,
+        "description": "已独立核实并由主人批准"
+      },
+      "evidence_ref": {
+        "type": "string",
+        "default": "",
+        "description": "身份核验证据引用"
+      }
+    }
+  },
+  "allow_llm_extraction": {
+    "description": "可选自动提取，可能产生 Provider 费用；默认关闭",
+    "type": "bool",
+    "default": false
+  },
+  "summary_provider_id": {
+    "description": "指定现有总结Provider，不切换聊天模型",
+    "type": "string",
+    "default": ""
+  },
+  "max_summary_calls_per_day": {
+    "description": "每日总结请求上限（UTC日，0禁止）",
+    "type": "int",
+    "default": 0
+  },
+  "min_summary_interval_seconds": {
+    "description": "两次总结尝试最小间隔秒数",
+    "type": "int",
+    "default": 600
+  },
+  "summary_rounds": {
+    "description": "累计完成轮次后才提取",
+    "type": "int",
+    "default": 20
+  },
+  "top_k": {
+    "description": "最多召回条数（1–3）",
+    "type": "int",
+    "default": 3
+  },
+  "graph_hops": {
+    "description": "图谱最大跳数（0–2）",
+    "type": "int",
+    "default": 2
+  },
+  "injection_budget": {
+    "description": "注入文本预算；默认计量为 UTF-8 字节估算，不是模型计费 Token",
+    "type": "int",
+    "default": 600
+  },
+  "retrieval_timeout_ms": {
+    "description": "SQLite检索预算毫秒",
+    "type": "int",
+    "default": 35
+  },
+  "hook_timeout_seconds": {
+    "description": "记忆Hook等待预算秒",
+    "type": "float",
+    "default": 0.08
+  },
+  "command_timeout_seconds": {
+    "description": "主动记忆指令的单次操作等待秒数，独立于聊天Hook预算",
+    "type": "float",
+    "default": 1.5
+  },
+  "minimum_score": {
+    "description": "可解释评分最低值，需合成集与实际样本调优",
+    "type": "float",
+    "default": 0.22
+  },
+  "cache_seconds": {
+    "description": "检索缓存秒数",
+    "type": "int",
+    "default": 30
+  },
+  "pending_source_limit": {
+    "description": "每作用域待处理原文缓存上限",
+    "type": "int",
+    "default": 500
+  },
+  "max_namespaces": {
+    "description": "命名空间数上限",
+    "type": "int",
+    "default": 256
+  },
+  "max_memories": {
+    "description": "长期记忆条数上限，满后停止新增不删旧数据",
+    "type": "int",
+    "default": 1000
+  },
+  "max_database_mb": {
+    "description": "SQLite主文件大小上限MiB",
+    "type": "int",
+    "default": 64
+  },
+  "weights": {
+    "description": "关联评分权重",
+    "type": "object",
+    "items": {
+      "keyword": {
+        "type": "float",
+        "default": 0.48,
+        "description": "关键词"
+      },
+      "tag": {
+        "type": "float",
+        "default": 0.16,
+        "description": "标签"
+      },
+      "graph": {
+        "type": "float",
+        "default": 0.2,
+        "description": "图谱距离"
+      },
+      "importance": {
+        "type": "float",
+        "default": 0.06,
+        "description": "重要性"
+      },
+      "recency": {
+        "type": "float",
+        "default": 0.04,
+        "description": "时间"
+      },
+      "reliability": {
+        "type": "float",
+        "default": 0.06,
+        "description": "来源可靠性"
+      }
+    }
+  },
+  "botchat_guard_enabled": {
+    "description": "结束语静默停止两位机器人互聊",
+    "type": "bool",
+    "default": false
+  },
+  "botchat_peer_umos": {
+    "description": "精确匹配的 Bot-to-Bot 会话完整 UMO；不授予记忆访问权限",
+    "type": "list",
+    "default": []
+  },
+  "elder_private_mutual_read": {
+    "description": "显式允许第二侧已核实 owner/peer 互读，不能互改或互删",
+    "type": "bool",
+    "default": false
+  }
+}
