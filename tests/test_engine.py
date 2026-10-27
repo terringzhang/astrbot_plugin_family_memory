@@ -12,10 +12,10 @@ from astrbot_plugin_family_memory.security import Rejected
 
 
 def fixture_config(**overrides):
-    return {"xiaoman_platform":"default","xiaoman_self_id":"fixture-bot",
-            "elder_platform":"official","owner_qq_ids":["owner-fixture"],
-            "elder_owner_openids":["owner-openid-fixture"],
-            "sister_binding":{"qq_id":"sister-fixture","approved":True,"evidence_ref":"synthetic-verified-route"},
+    return {"bot1_platform":"default","bot1_self_id":"fixture-bot",
+            "bot2_platform":"official","bot1_owner_ids":["owner-fixture"],
+            "bot2_owner_openids":["owner-openid-fixture"],
+            "bot1_peer_binding":{"qq_id":"peer-fixture","approved":True,"evidence_ref":"synthetic-verified-route"},
             "retrieval_timeout_ms":200,"max_summary_calls_per_day":2,"min_summary_interval_seconds":0,**overrides}
 
 
@@ -25,10 +25,10 @@ class EngineTests(unittest.TestCase):
         self.root=Path(self.tmp.name);self.now=[1792810000.]
         self.engine=MemoryEngine(self.root,fixture_config(),clock=lambda:self.now[0])
         self.owner=self.engine.policy.resolve('default','fixture-bot','owner-fixture')
-        self.sister=self.engine.policy.resolve('default','fixture-bot','sister-fixture')
+        self.peer=self.engine.policy.resolve('default','fixture-bot','peer-fixture')
         self.visitor=self.engine.policy.resolve('default','fixture-bot','visitor-A')
         self.other=self.engine.policy.resolve('default','fixture-bot','visitor-B')
-        self.elder=self.engine.policy.resolve('official','official-self','owner-openid-fixture')
+        self.bot2=self.engine.policy.resolve('official','official-self','owner-openid-fixture')
         self.seq=0
 
     def tearDown(self):
@@ -49,21 +49,21 @@ class EngineTests(unittest.TestCase):
         new=self.engine.policy.resolve('default','fixture-bot','owner-fixture')
         self.assertIn(mid,self.ids(new,'紫色风筝'))
 
-    def test_sister_to_owner_explicit_family_recall(self):
-        mid=self.write(self.sister,'我们一起修理了纸灯笼',True)
+    def test_peer_to_owner_explicit_family_recall(self):
+        mid=self.write(self.peer,'我们一起修理了纸灯笼',True)
         self.assertIn(mid,self.ids(self.owner,'纸灯笼'))
 
-    def test_owner_to_sister_explicit_family_recall(self):
+    def test_owner_to_peer_explicit_family_recall(self):
         mid=self.write(self.owner,'家庭一起欣赏蓝色流星',True)
-        self.assertIn(mid,self.ids(self.sister,'蓝色流星'))
+        self.assertIn(mid,self.ids(self.peer,'蓝色流星'))
 
     def test_private_owner_overlay_not_shared(self):
         mid=self.write(self.owner,'我私下喜欢绿色茶杯')
-        self.assertNotIn(mid,self.ids(self.sister,'绿色茶杯'))
+        self.assertNotIn(mid,self.ids(self.peer,'绿色茶杯'))
 
     def test_visitor_cannot_read_family_even_via_graph(self):
         mid=self.write(self.owner,'家庭收藏琥珀海螺',True,tags=['海螺'])
-        self.assertNotIn(mid,self.ids(self.visitor,'海螺 姐姐 小满'))
+        self.assertNotIn(mid,self.ids(self.visitor,'海螺 bot2 bot1'))
 
     def test_visitors_are_mutually_isolated(self):
         mid=self.write(self.visitor,'我喜欢银色纸鹤')
@@ -72,10 +72,10 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(Rejected):self.engine.get(self.other,mid)
 
     def test_agent_isolation(self):
-        a=self.write(self.elder,'姐姐珍藏红色贝壳')
-        b=self.write(self.owner,'小满珍藏金色风铃',True)
+        a=self.write(self.bot2,'bot2珍藏红色贝壳')
+        b=self.write(self.owner,'bot1珍藏金色风铃',True)
         self.assertNotIn(a,self.ids(self.owner,'红色贝壳'))
-        self.assertNotIn(b,self.ids(self.elder,'金色风铃'))
+        self.assertNotIn(b,self.ids(self.bot2,'金色风铃'))
 
     def test_same_name_does_not_merge_people(self):
         self.write(self.owner,'两位同名朋友一起赏月',entities=[{'key':'person:first','type':'Person','name':'张三'},
@@ -96,10 +96,10 @@ class EngineTests(unittest.TestCase):
 
     def test_cache_and_graph_do_not_resurrect_deleted_memory(self):
         mid=self.write(self.owner,'家庭记录翡翠山谷',True,tags=['山谷'])
-        self.assertIn(mid,self.ids(self.sister,'翡翠山谷'))
-        self.assertIn(mid,self.ids(self.sister,'翡翠山谷'))
+        self.assertIn(mid,self.ids(self.peer,'翡翠山谷'))
+        self.assertIn(mid,self.ids(self.peer,'翡翠山谷'))
         self.engine.forget(self.owner,mid)
-        self.assertNotIn(mid,self.ids(self.sister,'翡翠山谷'))
+        self.assertNotIn(mid,self.ids(self.peer,'翡翠山谷'))
         self.assertEqual(self.engine.db.execute('SELECT count(*) FROM edges WHERE source_memory=?',(mid,)).fetchone()[0],0)
         self.assertEqual(self.engine.db.execute('SELECT count(*) FROM aliases WHERE source_memory=?',(mid,)).fetchone()[0],0)
         self.engine.sync_markdown()
@@ -138,9 +138,9 @@ class EngineTests(unittest.TestCase):
 
     def test_revoked_family_binding_cannot_use_existing_cache(self):
         mid=self.write(self.owner,'家庭收藏白色纸扇',True)
-        self.assertIn(mid,self.ids(self.sister,'白色纸扇'))
-        cfg=fixture_config(sister_binding={'qq_id':'sister-fixture','approved':False})
-        revoked=type(self.engine.policy)(self.engine.key,cfg).resolve('default','fixture-bot','sister-fixture')
+        self.assertIn(mid,self.ids(self.peer,'白色纸扇'))
+        cfg=fixture_config(bot1_peer_binding={'qq_id':'peer-fixture','approved':False})
+        revoked=type(self.engine.policy)(self.engine.key,cfg).resolve('default','fixture-bot','peer-fixture')
         self.assertNotIn(mid,self.ids(revoked,'白色纸扇'))
 
     def test_plain_token_and_otp_credentials_are_blocked(self):
@@ -214,7 +214,7 @@ class EngineTests(unittest.TestCase):
     def test_bounded_one_hop_association(self):
         mid=self.write(self.owner,'去年参观了玉石展厅',True,entities=[{'key':'place:jade','type':'Place','name':'翠玉馆','aliases':['玉馆']},
                 {'key':'topic:exhibit','type':'Topic','name':'石雕展'}],edges=[{'src':'place:jade','dst':'topic:exhibit','relation':'RELATED_TO'}])
-        self.assertIn(mid,self.ids(self.sister,'玉馆'))
+        self.assertIn(mid,self.ids(self.peer,'玉馆'))
 
     def test_expired_alias_is_not_used_as_a_graph_seed(self):
         self.write(self.owner,'旧展厅使用过的名称',entities=[{'key':'place:hall','type':'Place','name':'旧称玉馆'}],ttl_days=1)
@@ -226,14 +226,14 @@ class EngineTests(unittest.TestCase):
         mid=self.write(self.owner,'我喜欢棕色木马',True)
         self.engine.close()
         self.engine=MemoryEngine(self.root,fixture_config(),clock=lambda:self.now[0])
-        p=self.engine.policy.resolve('default','fixture-bot','sister-fixture')
+        p=self.engine.policy.resolve('default','fixture-bot','peer-fixture')
         self.assertIn(mid,self.ids(p,'棕色木马'))
 
     def test_separate_process_reopens_persistent_memory(self):
         import subprocess,os
         mid=self.write(self.owner,'家庭记录合成松塔',True)
         self.engine.close()
-        code="import json,sys; from astrbot_plugin_family_memory.engine import MemoryEngine; e=MemoryEngine(sys.argv[1],json.loads(sys.argv[2])); p=e.policy.resolve('default','fixture-bot','sister-fixture'); print(json.dumps([r['id'] for r in e.search(p,'合成松塔')])); e.close()"
+        code="import json,sys; from astrbot_plugin_family_memory.engine import MemoryEngine; e=MemoryEngine(sys.argv[1],json.loads(sys.argv[2])); p=e.policy.resolve('default','fixture-bot','peer-fixture'); print(json.dumps([r['id'] for r in e.search(p,'合成松塔')])); e.close()"
         env={**os.environ,'PYTHONPATH':str(Path(__file__).resolve().parents[2])}
         output=subprocess.check_output([sys.executable,'-B','-c',code,str(self.root),json.dumps(fixture_config())],env=env,text=True)
         self.assertIn(mid,json.loads(output))
@@ -280,8 +280,8 @@ class EngineTests(unittest.TestCase):
         self.assertNotIn(mid,self.ids(self.owner,'琉璃杯'))
 
     def test_nickname_or_unapproved_binding_does_not_grant_access(self):
-        policy=type(self.engine.policy)(self.engine.key,fixture_config(sister_binding={'qq_id':'sister-fixture','approved':False}))
-        p=policy.resolve('default','fixture-bot','sister-fixture')
+        policy=type(self.engine.policy)(self.engine.key,fixture_config(bot1_peer_binding={'qq_id':'peer-fixture','approved':False}))
+        p=policy.resolve('default','fixture-bot','peer-fixture')
         self.assertEqual(p.role,'visitor');self.assertNotIn('family',p.readable)
         with self.assertRaises(Rejected):policy.resolve('unrelated','fixture-bot','owner-fixture')
         with self.assertRaises(Rejected):policy.resolve('default','wrong-bot','owner-fixture')
@@ -301,7 +301,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.engine.get(self.owner,a)['status'],'superseded')
         self.assertIn(merged,self.ids(self.owner,'木制书架'))
         self.assertNotIn(a,self.ids(self.owner,'蓝色帆船'))
-        with self.assertRaises(Rejected):self.engine.merge(self.sister,[a,b])
+        with self.assertRaises(Rejected):self.engine.merge(self.peer,[a,b])
 
     def test_memory_has_unknown_time_when_source_time_missing(self):
         sid=self.engine.capture(self.owner,'unknown-time','记录淡紫色云朵')

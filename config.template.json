@@ -1,17 +1,17 @@
 {
   "enabled": false,
-  "xiaoman_platform": "default",
-  "xiaoman_self_id": "",
-  "elder_platform": "qq_official",
-  "elder_self_id": "",
-  "owner_qq_ids": [],
-  "elder_owner_openids": [],
-  "sister_binding": {
+  "bot1_platform": "default",
+  "bot1_self_id": "",
+  "bot2_platform": "qq_official",
+  "bot2_self_id": "",
+  "bot1_owner_ids": [],
+  "bot2_owner_openids": [],
+  "bot1_peer_binding": {
     "qq_id": "",
     "approved": false,
     "evidence_ref": ""
   },
-  "elder_peer_binding": {
+  "bot2_peer_binding": {
     "openid": "",
     "approved": false,
     "evidence_ref": ""
@@ -43,5 +43,17 @@
   },
   "botchat_guard_enabled": false,
   "botchat_peer_umos": [],
-  "elder_private_mutual_read": false
+  "bot2_private_mutual_read": false,
+  "embedding_enabled": false,
+  "embedding_provider_id": "",
+  "embedding_index_interval_seconds": 1800,
+  "embedding_daily_calls": 500,
+  "embedding_daily_utf8_bytes": 200000,
+  "embedding_query_timeout_seconds": 0.6,
+  "embedding_min_similarity": 0.78,
+  "context_policy_enabled": false,
+  "activation_enabled": false,
+  "image_keep_rounds": 10,
+  "context_estimate_budget": 12000,
+  "context_recent_rounds": 12
 }

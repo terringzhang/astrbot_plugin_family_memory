@@ -1,41 +1,41 @@
 {
   "enabled": {
-    "description": "启用长期记忆；先完成平台及用户身份配置",
+    "description": "启用记忆插件（部署批准后才开启）",
     "type": "bool",
     "default": false
   },
-  "xiaoman_platform": {
-    "description": "OneBot 侧平台实例 ID（历史字段名，非人格名称）",
+  "bot1_platform": {
+    "description": "bot1 的平台实例 ID，必须与 AstrBot 实际配置一致",
     "type": "string",
     "default": "default"
   },
-  "xiaoman_self_id": {
-    "description": "OneBot 机器人的真实 self_id，必须填写；空值拒绝匹配",
+  "bot1_self_id": {
+    "description": "bot1 的真实 self_id；空值拒绝匹配，不是显示名称",
     "type": "string",
     "default": ""
   },
-  "elder_platform": {
-    "description": "第二侧 QQ 官方平台实例 ID；不用时填未使用的实例 ID",
+  "bot2_platform": {
+    "description": "bot2 的平台实例 ID；不用时填未使用且与 bot1 不同的 ID",
     "type": "string",
     "default": "qq_official"
   },
-  "elder_self_id": {
-    "description": "第二侧 self_id；可选严格校验，不要把 AppID 当成 self_id",
+  "bot2_self_id": {
+    "description": "bot2 可选严格 self_id 校验；不把 AppID 猜作 self_id",
     "type": "string",
     "default": ""
   },
-  "owner_qq_ids": {
-    "description": "经主人确认的QQ身份ID（不是昵称）",
+  "bot1_owner_ids": {
+    "description": "bot1 入口经核实的主人发送者 ID",
     "type": "list",
     "default": []
   },
-  "elder_owner_openids": {
-    "description": "姐姐入口经核实的主人OpenID",
+  "bot2_owner_openids": {
+    "description": "bot2入口经核实的主人OpenID",
     "type": "list",
     "default": []
   },
-  "sister_binding": {
-    "description": "姐姐在OneBot侧的身份绑定",
+  "bot1_peer_binding": {
+    "description": "bot2在OneBot侧的身份绑定",
     "type": "object",
     "items": {
       "qq_id": {
@@ -55,8 +55,8 @@
       }
     }
   },
-  "elder_peer_binding": {
-    "description": "小满在官方入口的身份绑定",
+  "bot2_peer_binding": {
+    "description": "bot1在官方入口的身份绑定",
     "type": "object",
     "items": {
       "openid": {
@@ -77,7 +77,7 @@
     }
   },
   "allow_llm_extraction": {
-    "description": "可选自动提取，可能产生 Provider 费用；默认关闭",
+    "description": "允许新增总结调用（独立费用审批）",
     "type": "bool",
     "default": false
   },
@@ -112,7 +112,7 @@
     "default": 2
   },
   "injection_budget": {
-    "description": "注入文本预算；默认计量为 UTF-8 字节估算，不是模型计费 Token",
+    "description": "注入内容预算，默认按 UTF-8 字节估算，不是计费 Token",
     "type": "int",
     "default": 600
   },
@@ -203,13 +203,73 @@
     "default": false
   },
   "botchat_peer_umos": {
-    "description": "精确匹配的 Bot-to-Bot 会话完整 UMO；不授予记忆访问权限",
+    "description": "只控制精确互聊会话，不授予记忆权限",
     "type": "list",
     "default": []
   },
-  "elder_private_mutual_read": {
-    "description": "显式允许第二侧已核实 owner/peer 互读，不能互改或互删",
+  "bot2_private_mutual_read": {
+    "description": "允许bot2侧已核实主人与bot1互读私有记忆，不能互改或互删",
     "type": "bool",
     "default": false
+  },
+  "embedding_enabled": {
+    "description": "启用增量向量检索；失败保留文字检索",
+    "type": "bool",
+    "default": false
+  },
+  "embedding_provider_id": {
+    "description": "现有 Embedding 提供商 ID，不填写 API Key",
+    "type": "string",
+    "default": ""
+  },
+  "embedding_index_interval_seconds": {
+    "description": "增量索引间隔秒；只处理有效长期条目",
+    "type": "int",
+    "default": 1800
+  },
+  "embedding_daily_calls": {
+    "description": "每日最大请求数；失败调用也计入，不自动重试",
+    "type": "int",
+    "default": 500
+  },
+  "embedding_daily_utf8_bytes": {
+    "description": "每日输入 UTF-8 字节上限，非账单 Token",
+    "type": "int",
+    "default": 200000
+  },
+  "embedding_query_timeout_seconds": {
+    "description": "查询最多等待秒数，超时用文字检索",
+    "type": "float",
+    "default": 0.6
+  },
+  "embedding_min_similarity": {
+    "description": "语义匹配最低余弦相似度；引擎最低允许 0.78",
+    "type": "float",
+    "default": 0.78
+  },
+  "context_policy_enabled": {
+    "description": "本地归档、图片期限和日常工具白名单",
+    "type": "bool",
+    "default": false
+  },
+  "activation_enabled": {
+    "description": "用进废退的本地记忆权重，不触发向量调用",
+    "type": "bool",
+    "default": false
+  },
+  "image_keep_rounds": {
+    "description": "图片保留至其后完成的交流轮次；之后本地回看",
+    "type": "int",
+    "default": 10
+  },
+  "context_estimate_budget": {
+    "description": "历史上下文的本地估算预算，非精确计费Token",
+    "type": "int",
+    "default": 12000
+  },
+  "context_recent_rounds": {
+    "description": "优先保留的近期交流轮数",
+    "type": "int",
+    "default": 12
   }
 }

@@ -1,21 +1,27 @@
 {
-  "version": "0.1.8",
-  "validation_date": "2026-10-27",
+  "version": "0.2.0",
+  "date": "2026-10-28",
   "tests": {
-    "tests": 81,
+    "tests": 136,
     "failures": 0,
     "errors": 0,
     "skipped": 0,
-    "seconds": 7.232810699999845,
+    "seconds": 13.707133500000054,
     "production_qq_test": false,
     "real_llm_calls": 0,
     "real_tts_calls": 0,
     "restart_test": "offline engine close/reopen and separate subprocess; not a production AstrBot restart"
   },
   "source_allowlist": true,
-  "private_deployment_marker_scan": "passed",
+  "private_marker_scan": "passed",
   "private_key_scan": "passed",
-  "local_markdown_links": "passed",
-  "scope": "synthetic offline tests; no live QQ, TTS or paid model calls",
-  "excluded": "runtime databases, identity keys, backups, private prompts, notebooks, personal audit reports, caches"
+  "local_documentation_links": "passed",
+  "internal_routes": [
+    "bot1",
+    "bot2"
+  ],
+  "optional_features_default_off": true,
+  "paid_api_calls": 0,
+  "live_deployment_modified": false,
+  "upgrade": "Unknown stored agent labels rejected before writes; no automatic legacy migration."
 }
