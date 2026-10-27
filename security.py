@@ -43,7 +43,7 @@ class Principal:
         return agent == self.agent and ns in self.readable
 
     def can_write(self, ns: str) -> bool:
-        return ns == self.private_ns or (ns == "family" and self.agent == "xiaoman" and self.role in {"owner", "sister"})
+        return ns == self.private_ns or (ns == "family" and self.agent == "bot1" and self.role in {"owner", "peer"})
 
 
 class IdentityPolicy:
@@ -63,26 +63,26 @@ class IdentityPolicy:
         if not private or not sender:
             raise Rejected("unsupported_or_unknown_sender")
         cfg = self.config
-        if platform == cfg.get("xiaoman_platform", "default"):
-            if self_id != str(cfg.get("xiaoman_self_id", "")):
+        if platform == cfg.get("bot1_platform", "default"):
+            if not cfg.get("bot1_self_id") or self_id != str(cfg.get("bot1_self_id", "")):
                 raise Rejected("unexpected_bot_self_id")
-            agent = "xiaoman"
-            role = "owner" if sender in cfg.get("owner_qq_ids", []) else "visitor"
-            binding = cfg.get("sister_binding", {})
+            agent = "bot1"
+            role = "owner" if sender in cfg.get("bot1_owner_ids", []) else "visitor"
+            binding = cfg.get("bot1_peer_binding", {})
             if (binding.get("approved") is True and binding.get("evidence_ref")
                     and sender == str(binding.get("qq_id", ""))):
                 if role == "owner":
                     raise Rejected("ambiguous_identity_binding")
-                role = "sister"
-        elif platform == cfg.get("elder_platform", "qq_official"):
+                role = "peer"
+        elif platform == cfg.get("bot2_platform", "qq_official"):
             # Official adapter self_id representation is not assumed to be AppID.
-            expected = cfg.get("elder_self_id", "")
+            expected = cfg.get("bot2_self_id", "")
             if expected and self_id != str(expected):
                 raise Rejected("unexpected_bot_self_id")
-            agent, role = "elder_sister", "visitor"
-            if sender in cfg.get("elder_owner_openids", []):
+            agent, role = "bot2", "visitor"
+            if sender in cfg.get("bot2_owner_openids", []):
                 role = "owner"
-            peer=cfg.get('elder_peer_binding',{})
+            peer=cfg.get('bot2_peer_binding',{})
             if peer.get('approved') is True and peer.get('evidence_ref') and sender==str(peer.get('openid','')):
                 if role=='owner':raise Rejected('ambiguous_identity_binding')
                 role='peer'
@@ -90,20 +90,20 @@ class IdentityPolicy:
             raise Rejected("unmanaged_platform")
         actor = self.hashed(platform + ":" + sender)
         ns = ("visitor-" if role == "visitor" else "private-") + actor
-        readable = (ns, "family") if agent == "xiaoman" and role in {"owner", "sister"} else (ns,)
-        if agent == 'elder_sister' and role in {'owner', 'peer'}:
+        readable = (ns, "family") if agent == "bot1" and role in {"owner", "peer"} else (ns,)
+        if agent == 'bot2' and role in {'owner', 'peer'}:
             ns = 'private-' + role + '-' + actor
             # Keep the same owner's existing private material readable without
             # moving rows. Peer approval never grants its former visitor domain.
             readable = (ns, 'private-' + actor) if role == 'owner' else (ns,)
-            if cfg.get('elder_private_mutual_read', False):
-                peer = cfg.get('elder_peer_binding', {})
+            if cfg.get('bot2_private_mutual_read', False):
+                peer = cfg.get('bot2_peer_binding', {})
                 if (role == 'owner' and peer.get('approved') is True
                         and peer.get('evidence_ref') and peer.get('openid')):
                     peer_actor = self.hashed(platform + ':' + str(peer['openid']))
                     readable += ('private-peer-' + peer_actor,)
                 elif role == 'peer':
-                    for owner_id in cfg.get('elder_owner_openids', []):
+                    for owner_id in cfg.get('bot2_owner_openids', []):
                         owner_actor = self.hashed(platform + ':' + str(owner_id))
                         readable += ('private-owner-' + owner_actor, 'private-' + owner_actor)
                 readable = tuple(dict.fromkeys(readable))

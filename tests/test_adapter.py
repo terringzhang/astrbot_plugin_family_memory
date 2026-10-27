@@ -18,8 +18,11 @@ class Filter:
     def event_message_type(self,*a,**kw):return lambda f:f
     def on_decorating_result(self,**kw):return lambda f:f
     def command(self,*a,**kw):return lambda f:f
-    def on_llm_request(self):return lambda f:f
-    def on_llm_response(self):return lambda f:f
+    def on_llm_request(self,**kw):return lambda f:f
+    def on_llm_response(self,**kw):return lambda f:f
+    def on_agent_done(self,**kw):return lambda f:f
+    def after_message_sent(self,**kw):return lambda f:f
+    def llm_tool(self,**kw):return lambda f:f
     def command_group(self,_):
         def decorate(f):
             f.command=lambda *_a,**_k:lambda method:method
@@ -42,7 +45,7 @@ def install_api_doubles():
     sys.modules['astrbot.core.star.filter.command'].GreedyStr=type('GreedyStr',(str,),{})
     for name in ['astrbot','astrbot.api','astrbot.api.event','astrbot.api.platform','astrbot.api.star','astrbot.core','astrbot.core.agent','astrbot.core.agent.message']:
         sys.modules[name]=types.ModuleType(name)
-    sys.modules['astrbot.api'].logger=types.SimpleNamespace(warning=lambda *_a,**_k:None)
+    sys.modules['astrbot.api'].logger=types.SimpleNamespace(warning=lambda *_a,**_k:None,info=lambda *_a,**_k:None)
     sys.modules['astrbot.api.event'].AstrMessageEvent=object
     sys.modules['astrbot.api.event'].filter=Filter()
     sys.modules['astrbot.api.platform'].MessageType=types.SimpleNamespace(FRIEND_MESSAGE='friend',GROUP_MESSAGE='group')
@@ -237,6 +240,40 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         await other.initialize()
         self.assertIsNone(other.engine)
         await other.terminate()
+
+    async def test_context_policy_filters_tools_without_mutating_global_registry(self):
+        from astrbot_plugin_family_memory.lifecycle import ConversationArchive
+        module=types.ModuleType('astrbot.core.agent.tool');module.ToolSet=lambda x:list(x);sys.modules[module.__name__]=module
+        self.plugin.config['context_policy_enabled']=True
+        self.plugin.archive=ConversationArchive(self.root/'archive',self.plugin.engine.key)
+        tools=[types.SimpleNamespace(name=n) for n in ['astrbot_execute_shell','astrbot_file_read_tool','send_message_to_user','companion_memory_search']]
+        req=request();req.func_tool=tools;req.conversation=types.SimpleNamespace(cid='c',token_usage=999)
+        await self.plugin.context_policy(Event(),req)
+        self.assertEqual([t.name for t in req.func_tool],['send_message_to_user','companion_memory_search'])
+        self.assertEqual(len(tools),4);self.assertEqual(req.conversation.token_usage,0)
+        self.assertEqual(req.system_prompt,'unchanged persona');self.assertEqual(req.model,'original-model');self.assertEqual(self.provider.calls,0)
+
+    async def test_policy_archive_unavailable_still_blocks_maintenance_tools(self):
+        module=types.ModuleType('astrbot.core.agent.tool');module.ToolSet=lambda x:list(x);sys.modules[module.__name__]=module
+        self.plugin.config['context_policy_enabled']=True
+        req=request();req.func_tool=[types.SimpleNamespace(name='astrbot_execute_shell')]
+        await self.plugin.context_policy(Event(),req)
+        self.assertEqual(req.func_tool,[]);self.assertEqual(req.contexts,[{'role':'user','content':'original history'}])
+
+    async def test_memory_tool_accepts_only_verbatim_current_user_fact(self):
+        result=await self.plugin.companion_memory_save(Event('我喜欢紫色风铃'),'我喜欢紫色风铃')
+        self.assertIn('已保存',result)
+        rows=self.plugin.engine.db.execute('select ns,text from memories').fetchall();self.assertEqual(len(rows),1);self.assertEqual(rows[0]['ns'],self.owner.private_ns)
+        self.assertEqual(self.provider.calls,0)
+
+    async def test_memory_tool_rejects_inference_uncertainty_privacy_and_optout(self):
+        for text,quote in [('我喜欢风铃','主人是物理学家'),('也许我喜欢紫色风铃','也许我喜欢紫色风铃'),('我的手机号13800138000','我的手机号13800138000'),('不要记住我喜欢风铃','我喜欢风铃')]:
+            result=await self.plugin.companion_memory_save(Event(text),quote);self.assertIn('未保存',result)
+        self.assertEqual(self.plugin.engine.db.execute('select count(*) from memories').fetchone()[0],0)
+
+    async def test_memory_tool_visitor_cannot_create_formal_entry(self):
+        result=await self.plugin.companion_memory_save(Event('我喜欢紫色风铃',sender='visitor-fixture'),'我喜欢紫色风铃')
+        self.assertIn('未保存',result)
 
 
 if __name__=='__main__':unittest.main()

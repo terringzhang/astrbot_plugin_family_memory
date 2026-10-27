@@ -1,9 +1,9 @@
 # 测试与验收
 
-从命名为 astrbot_plugin_family_memory 的源码目录运行 `python -B tests/run_tests.py`。测试只使用临时目录、虚构身份和 AstrBot API doubles，无外部聊天模型、QQ 或 TTS 调用。
+在 Python 3.12、支持 FTS5 的 SQLite 下执行 `python -B tests/run_tests.py`。测试使用临时目录、虚构身份和 AstrBot API / Provider doubles，真实 QQ、LLM、Embedding 和 TTS 调用均为零。实际结果见 `docs/VALIDATION.json`。
 
-覆盖身份与访客隔离、owner/peer 互读的边界和撤销、跨 Agent 隔离、来源与引用验证、共享授权、隐私拒绝、持久化、纠正/合并/遗忘、索引修复、缓存失效、Token 预算估算、假模型提取预算、hook 行为和互聊停止标记。
+覆盖来源/ACL、owner/peer/visitor 隔离、共享、纠正、遗忘、合并、图谱、向量增量与预算、请求超时去重、图片 9/10 轮边界及失败保护、工具成对清理、原文重启保留、激活衰减与强化、旧路由拒绝且不改原文件，以及公开默认值。
 
-测试中的假模型不是自然语言质量验收；close/reopen 也不等于完整生产环境重启。`tests/benchmark.py` 是本机合成基准，结果取决于设备和临时磁盘，不是延迟服务承诺。
+真实部署还应自行验证：两位测试用户各存一条记忆、互查越权拒绝、新会话和重启后持久、图片 10 轮后仍可按权限回看、正常 QQ/TTS 与社交插件、磁盘增长和渠道费用。不要向真实联系人群发测试。
 
-安装者应在隔离实例检查：真实适配器 message_id、self_id、平台 ID 与完整 UMO；保存/搜索；新会话与插件重载后召回；无关查询不注入；不同身份无法越权；原聊天模型、人格和 TTS 正常；guard 暂停与恢复。不要向未经同意的真实联系人发送验收消息。
+基于 AstrBot 4.29.1 接口实现，不代表后续版本、每种适配器、操作系统或渠道都验收通过。Token 节省取决于历史与工具占比，不提供固定百分比承诺。
