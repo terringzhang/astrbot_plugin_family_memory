@@ -1,0 +1,47 @@
+{
+  "enabled": false,
+  "xiaoman_platform": "default",
+  "xiaoman_self_id": "",
+  "elder_platform": "qq_official",
+  "elder_self_id": "",
+  "owner_qq_ids": [],
+  "elder_owner_openids": [],
+  "sister_binding": {
+    "qq_id": "",
+    "approved": false,
+    "evidence_ref": ""
+  },
+  "elder_peer_binding": {
+    "openid": "",
+    "approved": false,
+    "evidence_ref": ""
+  },
+  "allow_llm_extraction": false,
+  "summary_provider_id": "",
+  "max_summary_calls_per_day": 0,
+  "min_summary_interval_seconds": 600,
+  "summary_rounds": 20,
+  "top_k": 3,
+  "graph_hops": 2,
+  "injection_budget": 600,
+  "retrieval_timeout_ms": 35,
+  "hook_timeout_seconds": 0.08,
+  "command_timeout_seconds": 1.5,
+  "minimum_score": 0.22,
+  "cache_seconds": 30,
+  "pending_source_limit": 500,
+  "max_namespaces": 256,
+  "max_memories": 1000,
+  "max_database_mb": 64,
+  "weights": {
+    "keyword": 0.48,
+    "tag": 0.16,
+    "graph": 0.2,
+    "importance": 0.06,
+    "recency": 0.04,
+    "reliability": 0.06
+  },
+  "botchat_guard_enabled": false,
+  "botchat_peer_umos": [],
+  "elder_private_mutual_read": false
+}
