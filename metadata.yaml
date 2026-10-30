@@ -1,6 +1,6 @@
 name: astrbot_plugin_family_memory
 display_name: 轻量家庭记忆
-version: 0.2.0
+version: 0.2.1
 author: terringzhang
 desc: 双 Bot 隔离记忆、可选增量向量检索、本地聊天档案与上下文整理；新增功能默认关闭。
 repo: https://github.com/terringzhang/astrbot_plugin_family_memory
