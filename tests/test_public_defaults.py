@@ -38,5 +38,5 @@ class PublicDefaultsTests(unittest.TestCase):
 
     def test_public_version_and_repository(self):
         metadata = (ROOT / 'metadata.yaml').read_text(encoding='utf-8')
-        self.assertIn('version: 0.2.0', metadata)
+        self.assertIn('version: 0.2.1', metadata)
         self.assertIn('https://github.com/terringzhang/astrbot_plugin_family_memory', metadata)

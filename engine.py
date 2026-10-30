@@ -17,8 +17,9 @@ import uuid
 from collections import OrderedDict, deque
 from pathlib import Path
 
-from .security import IdentityPolicy, Principal, PRIVATE, UNCERTAIN, Rejected, safe_text
 from .compat import guard_labels
+from .privacy import PrivacyPolicy,level
+from .security import IdentityPolicy, Principal, PRIVATE, UNCERTAIN, Rejected, safe_text
 
 ENTITY_TYPES = {"Agent", "Person", "Event", "Place", "Topic", "Preference", "Goal", "Relationship", "Memory"}
 RELATIONS = {"KNOWS", "TALKS_WITH", "EXPERIENCED", "LIKES", "DISLIKES", "RELATED_TO", "MENTIONED_IN", "OCCURRED_AT", "PARTICIPATED_IN", "CONTRADICTS", "SUPERSEDES"}
@@ -70,7 +71,7 @@ class MemoryEngine:
     """Single-process, bounded SQLite index of authoritative Markdown documents."""
     def __init__(self, root, config=None, *, clock=time.time, token_counter=None):
         self.root = Path(root).resolve()
-        guard_labels(self.root,[('index/memory.sqlite3',['memories','sources','namespaces']),('index/embedding.sqlite3',['vectors'])])
+        guard_labels(self.root,[('index/memory.sqlite3',['memories','sources','namespaces']),('index/embedding.sqlite3',['vectors','archive_vectors'])])
         self.root.mkdir(parents=True, exist_ok=True)
         self.config, self.clock = config or {}, clock
         self.lock = threading.RLock()
@@ -88,6 +89,7 @@ class MemoryEngine:
         if len(self.key) != 32:
             raise Rejected("invalid_identity_key")
         self.policy = IdentityPolicy(self.key, self.config)
+        self.privacy = PrivacyPolicy(self.root,self.key)
         self._safe_path(self.root / "index").mkdir(exist_ok=True)
         self.forgotten={}
         ledger=self._safe_path(self.root/'.forgotten.json')
@@ -385,7 +387,7 @@ class MemoryEngine:
     def get(self, p, mid):
         with self.lock:
             row = self.db.execute("SELECT * FROM memories WHERE id=?", (mid,)).fetchone()
-            if not row or not p.can_read(row["agent"], row["ns"]):
+            if not row or not p.can_read(row["agent"], row["ns"]) or not self.privacy_allowed(p,dict(row)):
                 raise Rejected("memory_not_visible")
             return dict(row)
 
@@ -489,6 +491,26 @@ class MemoryEngine:
                 if not (self.root / row["path"]).is_file():
                     self._drop_index(row["id"]); self._invalidate()
 
+    def privacy_record(self, row):
+        # The namespace's first writer is not necessarily this fact's subject.
+        try:doc=self._parse(self.root/row['path'])
+        except (ValueError,OSError,KeyError):doc={}
+        subject=doc.get('owner','')
+        if not re.fullmatch('[a-f0-9]{24}',subject):
+            actors={x.get('actor','') for x in doc.get('sources',[]) if re.fullmatch('[a-f0-9]{24}',x.get('actor',''))}
+            subject=next(iter(actors)) if len(actors)==1 else ''
+        return {'agent':row['agent'],'ns':row['ns'],'subject':subject, 'text':row['text']}
+
+    def query_private(self,p,query):
+        if level(query)>=2:return True
+        if len(query.strip())<3:return False
+        with self.lock:
+            rows=self.db.execute('SELECT * FROM memories WHERE agent=? AND ns IN ('+','.join('?' for _ in p.readable)+')',(p.agent,*p.readable)).fetchall()
+            return any(query.strip() in r['text'] and self.privacy.sensitivity(**self.privacy_record(dict(r)))>=2 for r in rows)
+
+    def privacy_allowed(self,p,row,purpose='read'):
+        return self.privacy.allowed(p,**self.privacy_record(row),purpose=purpose)
+
     def vector_documents(self, p=None):
         """Current authoritative long-term documents, scoped before vector access."""
         with self.lock:
@@ -498,7 +520,7 @@ class MemoryEngine:
                 sql += ' AND agent=? AND ns IN ('+','.join('?' for _ in p.readable)+')'
                 args.extend([p.agent,*p.readable])
             rows = self.db.execute(sql+' ORDER BY created,id LIMIT 1000',args).fetchall()
-            return [dict(r) for r in rows if self._row_current(dict(r))]
+            return [dict(r) for r in rows if self._row_current(dict(r)) and self.privacy_allowed(p,dict(r),'embed')]
 
     def search(self, p, query, *, limit=None, semantic=None):
         query = safe_text(query, 1024)
@@ -510,14 +532,17 @@ class MemoryEngine:
             rev = self.db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0]
             semantic = semantic or []
             semantic_key = tuple((s['id'],s['digest'],round(s['similarity'],6)) for s in semantic)
-            cachekey = (p.agent, p.actor, p.readable, p.persona, rev, canonical(query), semantic_key)
+            cachekey = (p.agent, p.actor, p.readable, p.persona, rev, self.privacy.revision, canonical(query), semantic_key)
             cached = self.cache.get(cachekey)
             if cached and cached[0] > self.clock():
                 # Do not leak deleted/edited/expired documents through a cache hit.
-                if all(self._row_current(r) for r in cached[1]):
+                if all(self._row_current(r) and self.privacy_allowed(p,r) for r in cached[1]):
                     self._metric("cache_hits"); return copy.deepcopy(cached[1])
+            subjects={x['id']:self.privacy_record(dict(x))['subject'] for x in self.db.execute('SELECT * FROM memories WHERE agent=? AND ns IN ('+','.join('?' for _ in p.readable)+')',(p.agent,*p.readable))}
+            self.db.create_function('privacy_read',4,lambda ag,ns,mid,text:self.privacy.allowed(p,ag,ns,subjects.get(mid,''),text))
             nsmarks = ",".join('?' for _ in p.readable)
             acl = "m.agent=? AND m.ns IN ("+nsmarks+") AND m.status='active' AND (m.expires IS NULL OR m.expires>?) AND m.confidence>=0.8 AND NOT EXISTS(SELECT 1 FROM tombstones t WHERE t.agent=m.agent AND t.ns=m.ns AND t.digest=m.digest)"
+            acl+=' AND privacy_read(m.agent,m.ns,m.id,m.text)'
             args = (p.agent, *p.readable, self.clock())
             candidates = {}
             deadline = time.perf_counter() + float(self.config.get("retrieval_timeout_ms", 35))/1000
@@ -558,7 +583,7 @@ class MemoryEngine:
                         candidates[row["id"]]=dict(row);graph_scores[row["id"]]=max(graph_scores.get(row["id"],0),1/(dist+1))
                 ranked=[];weights={"keyword":.48,"tag":.16,"graph":.2,"importance":.06,"recency":.04,"reliability":.06,**self.config.get("weights",{})}
                 for row in candidates.values():
-                    if not self._row_current(row):
+                    if not self._row_current(row) or not self.privacy_allowed(p,row):
                         continue
                     lexical=len(set(terms)&words(row["text"]))/max(1,len(terms))
                     tags={r[0] for r in self.db.execute("SELECT tag FROM tags WHERE memory_id=?",(row["id"],))}
