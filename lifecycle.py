@@ -2,8 +2,9 @@
 from __future__ import annotations
 import base64,collections,copy,hashlib,hmac,ipaddress,json,math,os,re,socket,sqlite3,threading,time,urllib.parse,urllib.request
 from pathlib import Path
-from .security import Rejected,SECRET,PRIVATE,UNCERTAIN
 from .compat import guard_labels
+from .privacy import PrivacyPolicy,level,filtered_payload
+from .security import Rejected,SECRET,PRIVATE,UNCERTAIN
 
 SOCIAL_TOOLS=frozenset({'send_message_to_user','get_group_message_history','search_memes',
  'llm_view_feed','llm_publish_feed','future_task','astr_kb_search',
@@ -45,10 +46,11 @@ def validate_url(url):
 
 class ConversationArchive:
  def __init__(self,root,key,config=None,clock=time.time):
-  guard_labels(root,[('archive.sqlite3',['messages','events','images','handoffs','snapshots'])])
+  guard_labels(root,[('archive.sqlite3',['messages','events','images','handoffs','snapshots','label_signatures'])])
   self.root=Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True,mode=0o700)
   if Path(root).is_symlink():raise Rejected('archive_symlink')
   self.key=key;self.config=config or {};self.clock=clock;self.lock=threading.RLock()
+  self.privacy=PrivacyPolicy(self.root.parent/'agent_memory',key)
   path=self.root/'archive.sqlite3'
   if path.is_symlink():raise Rejected('archive_symlink')
   self.db=sqlite3.connect(path,timeout=2,check_same_thread=False);self.db.row_factory=sqlite3.Row
@@ -60,6 +62,8 @@ class ConversationArchive:
    CREATE TABLE IF NOT EXISTS images(id TEXT PRIMARY KEY,agent TEXT,ns TEXT,refhash TEXT,path TEXT,created REAL,UNIQUE(agent,ns,refhash));
    CREATE TABLE IF NOT EXISTS handoffs(agent TEXT,ns TEXT,cid TEXT,text TEXT,created REAL,PRIMARY KEY(agent,ns,cid));
    CREATE TABLE IF NOT EXISTS counters(key TEXT PRIMARY KEY,value INTEGER);
+   CREATE TABLE IF NOT EXISTS archive_labels(message_id INTEGER PRIMARY KEY,label TEXT,reason TEXT,signature TEXT,marked REAL);
+   CREATE TABLE IF NOT EXISTS label_signatures(agent TEXT,ns TEXT,cid TEXT,signature TEXT,label TEXT,reason TEXT,marked REAL,PRIMARY KEY(agent,ns,cid,signature));
   ''');self.db.commit();os.chmod(path,0o600);self._permissions()
  def _permissions(self):
   for f in self.root.glob('archive.sqlite3*'):
@@ -71,15 +75,19 @@ class ConversationArchive:
  def event(self,p,event_id,direction,payload):
   if not event_id:raise Rejected('missing_event_id')
   with self.lock,self.db:
-   self.db.execute('INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?)',(p.agent,p.private_ns,self.mac(event_id),direction,dumps(payload),self.clock()));self._permissions()
+   self.db.execute('INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?)',(p.agent,p.private_ns,self.mac(event_id),direction,dumps(filtered_payload(payload)),self.clock()));self._permissions()
  def snapshot(self,p,cid,messages):
   """Lossless payload archive; stable repeated identical messages retain occurrence counts."""
   with self.lock,self.db:
    ids=[];counts=collections.Counter()
    for m in messages:
+    m=filtered_payload(m)
     raw=dumps(m);digest=self.mac(raw);counts[digest]+=1
     self.db.execute('INSERT OR IGNORE INTO messages(agent,ns,actor,cid,digest,occurrence,role,payload,created) VALUES(?,?,?,?,?,?,?,?,?)',(p.agent,p.private_ns,p.actor,cid,digest,counts[digest],m.get('role','unknown'),raw,self.clock()))
     mid=self.db.execute('SELECT id FROM messages WHERE agent=? AND ns=? AND cid=? AND digest=? AND occurrence=?',(p.agent,p.private_ns,cid,digest,counts[digest])).fetchone()[0];ids.append(mid)
+    signature=self.mac(dumps(m))
+    label=self.db.execute('SELECT label,reason,marked FROM label_signatures WHERE agent=? AND ns=? AND cid=? AND signature=?',(p.agent,p.private_ns,cid,signature)).fetchone()
+    if label:self.db.execute('INSERT OR IGNORE INTO archive_labels VALUES(?,?,?,?,?)',(mid,label[0],label[1],signature,label[2]))
     # Technical tool arguments/returns and hidden thinking NEVER enter ordinary search.
     text=visible(m)
     if m.get('role') in {'user','assistant'} and not m.get('tool_calls') and text and not text.startswith(SUMMARY_MARK) and not SECRET.search(text):
@@ -124,13 +132,43 @@ class ConversationArchive:
   os.replace(tmp,path)
   with self.lock,self.db:self.db.execute('INSERT OR REPLACE INTO images VALUES(?,?,?,?,?,?)',(mid,p.agent,p.private_ns,rh,str(path.relative_to(self.root)),self.clock()))
   return mid
+ def image_privacy_record(self,p,mid):
+  if not re.fullmatch('[a-f0-9]{32}',mid):raise Rejected('invalid_image_id')
+  with self.lock:row=self.db.execute('SELECT * FROM images WHERE id=?',(mid,)).fetchone()
+  if not row or not p.can_read(row['agent'],row['ns']):raise Rejected('image_scope_denied')
+  subject=Path(row['path']).parent.name
+  if p.actor!=subject:raise Rejected('privacy_subject_only')
+  return {'agent':row['agent'],'ns':row['ns'],'subject':subject,'text':'仅你知道：[图片:'+mid+']'}
  def image(self,p,mid):
   if not re.fullmatch('[a-f0-9]{32}',mid):raise Rejected('invalid_image_id')
   with self.lock:row=self.db.execute('SELECT * FROM images WHERE id=?',(mid,)).fetchone()
   if not row or not p.can_read(row['agent'],row['ns']):raise Rejected('image_scope_denied')
+  subject=Path(row['path']).parent.name
+  if not self.privacy.allowed(p,row['agent'],row['ns'],subject,'仅你知道：[图片:'+mid+']'):raise Rejected('image_privacy_denied')
   path=(self.root/row['path']).resolve()
   if not path.is_relative_to(self.root) or not path.is_file():raise Rejected('image_unavailable')
   return path
+ def query_private(self,p,query):
+  if level(query)>=2:return True
+  if len(query.strip())<3:return False
+  marks=','.join('?' for _ in p.readable)
+  with self.lock:rows=self.db.execute('SELECT m.agent,m.ns,m.actor,f.text FROM messages m JOIN chat_fts f ON m.id=CAST(f.id AS INTEGER) WHERE m.agent=? AND m.ns IN ('+marks+')',(p.agent,*p.readable)).fetchall()
+  return any(query.strip() in row['text'] and self.privacy.sensitivity(row['agent'],row['ns'],row['actor'],row['text'])>=2 for row in rows)
+ def prepare_read(self,p,purpose='read'):
+  # Evaluate policy once per joined record, not per SQLite virtual-table join pair.
+  sql='SELECT m.id,m.agent,m.ns,m.actor,f.text FROM messages m JOIN chat_fts f ON m.id=CAST(f.id AS INTEGER) WHERE NOT EXISTS(SELECT 1 FROM archive_labels q WHERE q.message_id=m.id)'
+  args=()
+  if p is not None:
+   sql+=' AND m.agent=? AND m.ns IN ('+','.join('?' for _ in p.readable)+')';args=(p.agent,*p.readable)
+  rows=self.db.execute(sql,args).fetchall()
+  allowed={row['id'] for row in rows if self.privacy.allowed(p,row['agent'],row['ns'],row['actor'],row['text'],purpose)}
+  self.db.create_function('_privacy_id',1,lambda mid:mid in allowed)
+ def privacy_record(self,p,mid):
+  with self.lock:row=self.db.execute('SELECT agent,ns,actor,payload FROM messages WHERE id=?',(int(mid),)).fetchone()
+  if not row or not p.can_read(row['agent'],row['ns']):raise Rejected('archive_not_visible')
+  record={'agent':row['agent'],'ns':row['ns'],'subject':row['actor'],'text':visible(json.loads(row['payload']))}
+  if record['subject']!=p.actor:raise Rejected('privacy_subject_only')
+  return record
  def search(self,p,query,limit=3):
   # A slow-path tool used explicitly, not injected every turn; no vector call.
   from .engine import words
@@ -140,18 +178,77 @@ class ConversationArchive:
   # FTS Unicode doesn't segment Chinese. LIKE candidates supplement it, ACL in SQL.
   marks=','.join('?' for _ in p.readable)
   with self.lock:
-   rows=self.db.execute('SELECT m.id,m.role,m.created,f.text FROM messages m JOIN chat_fts f ON f.id=CAST(m.id AS TEXT) WHERE m.agent=? AND m.ns IN ('+marks+') AND ('+' OR '.join('f.text LIKE ?' for _ in terms)+') ORDER BY m.created DESC,m.id DESC LIMIT 64',(p.agent,*p.readable,*['%'+t+'%' for t in terms])).fetchall()
+   self.prepare_read(p)
+   rows=self.db.execute('SELECT m.id,m.role,m.created,f.text FROM messages m JOIN chat_fts f ON m.id=CAST(f.id AS INTEGER) WHERE NOT EXISTS(SELECT 1 FROM archive_labels q WHERE q.message_id=m.id) AND _privacy_id(m.id) AND m.agent=? AND m.ns IN ('+marks+') AND ('+' OR '.join('f.text LIKE ?' for _ in terms)+') ORDER BY m.created DESC,m.id DESC LIMIT 64',(p.agent,*p.readable,*['%'+t+'%' for t in terms])).fetchall()
   ranked=sorted(rows,key=lambda r:(-sum(t in r['text'] for t in terms),-r['created']))
   out=[];seen=set()
   for row in ranked:
    if row['text'] in seen:continue
    seen.add(row['text']);out.append({'id':row['id'],'role':row['role'],'archived_at':row['created'],'text':row['text'][:500]})
    if len(out)>=max(1,min(3,limit)):break
+  return self.describe_times(p,out)
+ def earliest_query(self,query):
+  return bool(re.search(r'第一次.{0,8}(聊天|见面|认识)|最早.{0,8}(聊天|对话|记录)|最开始|最初.{0,6}(聊天|对话|认识)|初次.{0,4}(聊天|见面)',query))
+ def available_sessions(self,p):
+  if not p.readable:return []
+  marks=','.join('?' for _ in p.readable)
+  with self.lock:
+   self.prepare_read(p)
+   rows=self.db.execute('SELECT m.cid,COUNT(DISTINCT m.id) AS total,MIN(m.id) AS first_id FROM messages m JOIN chat_fts f ON m.id=CAST(f.id AS INTEGER) WHERE NOT EXISTS(SELECT 1 FROM archive_labels q WHERE q.message_id=m.id) AND _privacy_id(m.id) AND m.agent=? AND m.ns IN ('+marks+') GROUP BY m.cid',(p.agent,*p.readable)).fetchall()
+  out=[dict(cid=r['cid'],searchable_messages=r['total'],first_id=r['first_id'],created_at=None,updated_at=None) for r in rows]
+  native=None
+  try:
+   path=Path(getattr(self,'native_history_path',Path('/AstrBot/data/data_v4.db')))
+   if path.is_file():
+    native=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+    for r in out:
+     bounds=native.execute('SELECT created_at,updated_at FROM conversations WHERE conversation_id=?',(r['cid'],)).fetchone()
+     if bounds:r.update(created_at=bounds[0],updated_at=bounds[1])
+  except sqlite3.Error:pass
+  finally:
+   if native:native.close()
+  return sorted(out,key=lambda r:(r['created_at'] is None,r['created_at'] or '',r['first_id']))
+ def earliest(self,p):
+  sessions=self.available_sessions(p)
+  if not sessions:return []
+  marks=','.join('?' for _ in p.readable)
+  with self.lock:
+   self.prepare_read(p)
+   rows=self.db.execute('SELECT m.id,m.role,f.text FROM messages m JOIN chat_fts f ON m.id=CAST(f.id AS INTEGER) WHERE NOT EXISTS(SELECT 1 FROM archive_labels q WHERE q.message_id=m.id) AND _privacy_id(m.id) AND m.agent=? AND m.ns IN ('+marks+') AND m.cid=? ORDER BY m.id LIMIT 3',(p.agent,*p.readable,sessions[0]['cid'])).fetchall()
+  return self.describe_times(p,[dict(id=r['id'],role=r['role'],text=r['text'][:500],source='earliest_available_searchable_session') for r in rows])
+ def search_report(self,p,rows,mode):
+  sessions=self.available_sessions(p)
+  return {'mode':mode,'coverage':{'scope':'current_identity_across_accessible_sessions','accessible_sessions':len(sessions),'searchable_messages':sum(r['searchable_messages'] for r in sessions),'earliest_available_conversation_created_at':sessions[0]['created_at'] if sessions else None,'timezone':'native_db_unspecified'},'results':rows,'interpretation':'检索结果只是片段，不能据此断言更早记录已删除。最早可用会话不保证是首次相识；消息时间未知时不得推断日期。若需查看开头，请使用第一次聊天或最早聊天记录查询。'}
+ def describe_times(self,p,results):
+  """Archive timestamps never establish when a historical message was sent."""
+  out=[];native=None
+  try:
+   path=getattr(self,'native_history_path',Path('/AstrBot/data/data_v4.db'))
+   if Path(path).is_file():native=sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True)
+   for result in results:
+    with self.lock:row=self.db.execute('SELECT agent,ns,actor,payload,cid,created FROM messages WHERE id=? AND NOT EXISTS(SELECT 1 FROM archive_labels q WHERE q.message_id=messages.id)',(result['id'],)).fetchone()
+    if not row or not self.privacy.allowed(p,row['agent'],row['ns'],row['actor'],visible(json.loads(row['payload']))):continue
+    item=dict(result);item.pop('archived_at',None)
+    item['privacy_ref']='archive:'+str(result['id'])
+    item.update(message_time=None,message_time_status='unknown',time_note='归档写入时间不是聊天发生时间；会话起止时间不能当作单条消息时间。')
+    if native:
+     bounds=native.execute('SELECT created_at,updated_at FROM conversations WHERE conversation_id=?',(row['cid'],)).fetchone()
+     if bounds:item['conversation_time_bounds']={'created_at':bounds[0],'updated_at':bounds[1],'timezone':'native_db_unspecified','precision':'conversation_only_not_message'}
+    out.append(item)
+  except sqlite3.Error:
+   # No fabricated fallback dates if native history is unavailable.
+   for result in results:
+    with self.lock:row=self.db.execute('SELECT agent,ns,actor,payload FROM messages WHERE id=? AND NOT EXISTS(SELECT 1 FROM archive_labels q WHERE q.message_id=messages.id)',(result['id'],)).fetchone()
+    if row and self.privacy.allowed(p,row['agent'],row['ns'],row['actor'],visible(json.loads(row['payload']))):
+     item=dict(result);item.pop('archived_at',None);item.update(message_time=None,message_time_status='unknown',time_note='单条消息发生时间未知；不能由归档时间推断。');out.append(item)
+   out=list({x['id']:x for x in out}.values())
+  finally:
+   if native:native.close()
   return out
  def transform(self,p,cid,messages):
   """Archive first; remove only provider-facing payloads. Failure never destroys originals."""
   self.snapshot(p,cid,messages)
-  result=copy.deepcopy(messages);stats=collections.Counter();allowed=SOCIAL_TOOLS
+  result=[filtered_payload(m) for m in messages];stats=collections.Counter();allowed=SOCIAL_TOOLS
   real_user=lambda m:m.get('role')=='user' and not visible(m).startswith(SUMMARY_MARK)
   completed=sum(real_user(m) for m in result);turn=-1;remove_ids=set();out=[]
   # Only remove complete historical tool pairs; never touch current in-flight calls.
@@ -205,10 +302,10 @@ class ConversationArchive:
    if old:
     with self.lock:prev=self.db.execute('SELECT text FROM handoffs WHERE agent=? AND ns=? AND cid=?',(p.agent,p.private_ns,cid)).fetchone()
     snippets=[]
-    if prev:snippets.extend(prev[0].splitlines()[1:])
+    if prev:snippets.extend(x for x in prev[0].splitlines()[1:] if self.privacy.allowed(p,p.agent,p.private_ns,p.actor,x))
     for m in old:
      text=visible(m).strip()
-     if m.get('role') not in {'user','assistant'} or m.get('tool_calls') or not text or text.startswith(SUMMARY_MARK) or SECRET.search(text):continue
+     if m.get('role') not in {'user','assistant'} or m.get('tool_calls') or not text or text.startswith(SUMMARY_MARK) or SECRET.search(text) or not self.privacy.allowed(p,p.agent,p.private_ns,p.actor,text):continue
      # Extractive quotations only, never invented memories or LLM-generated claims.
      snippets.append(('用户原话：' if m['role']=='user' else '助手原话：')+text[:180].replace('\n',' '))
     stable=[s for s in snippets if re.search('答应|约定|下次|待办|还没|记住|不要|取消',s)]

@@ -1,12 +1,12 @@
 {
-  "version": "0.2.0",
-  "date": "2026-10-28",
+  "version": "0.2.1",
+  "date": "2026-10-30",
   "tests": {
-    "tests": 136,
+    "tests": 235,
     "failures": 0,
     "errors": 0,
     "skipped": 0,
-    "seconds": 13.707133500000054,
+    "seconds": 33.79349119999824,
     "production_qq_test": false,
     "real_llm_calls": 0,
     "real_tts_calls": 0,

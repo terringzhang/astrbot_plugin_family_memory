@@ -11,6 +11,7 @@ import time
 from collections import OrderedDict
 
 from .security import safe_text, PRIVATE
+from .privacy import level
 
 
 def unit_vector(values, dimensions):
@@ -76,8 +77,9 @@ class VectorMemory:
     def busy(self):
         return self.inflight is not None and not self.inflight.done()
 
-    async def _request(self, texts, on_success):
+    async def _request(self, texts, on_success, guard=None):
         try:
+            if guard is not None and not guard():return None
             result = await self.provider.get_embeddings(texts)
             if len(result) != len(texts):
                 raise ValueError('embedding_count_mismatch')
@@ -95,10 +97,10 @@ class VectorMemory:
                 self.cooldown_until = self.clock()+300
             return None
 
-    async def request(self, texts, callback, timeout):
+    async def request(self, texts, callback, timeout, guard=None):
         if self.closed or self.busy() or self.clock() < self.cooldown_until or not self.reserve(texts):
             return None
-        self.inflight = asyncio.create_task(self._request(texts, callback))
+        self.inflight = asyncio.create_task(self._request(texts, callback, guard))
         try:
             # A timed-out SDK thread may still run. Keep its task until completion;
             # no overlapping requests, automatic retry or model fallback.
@@ -109,11 +111,12 @@ class VectorMemory:
 
     def candidates(self, principal):
         # ACL is applied by the engine before text/digest/vector ranking is accessed.
-        return [r for r in self.engine.vector_documents(principal) if not PRIVATE.search(r['text'])]
+        return [r for r in self.engine.vector_documents(principal) if level(r['text'])<2]
 
     async def related(self, principal, query):
         query = safe_text(query[:512], 1024)
-        if PRIVATE.search(query):return []
+        archive=getattr(self,'archive_index',None)
+        if self.engine.query_private(principal,query) or (archive and await asyncio.to_thread(archive.archive.query_private,principal,query)):return []
         docs = self.candidates(principal)
         if not docs or not query:
             return []
@@ -136,7 +139,7 @@ class VectorMemory:
                 self.cache[key] = (self.clock()+3600,vectors[0])
                 self.cache.move_to_end(key)
                 while len(self.cache)>128:self.cache.popitem(last=False)
-            result = await self.request([query], save, float(self.config.get('embedding_query_timeout_seconds', .6)))
+            result = await self.request([query], save, float(self.config.get('embedding_query_timeout_seconds', .6)),guard=lambda:not self.engine.query_private(principal,query) and not (archive and archive.archive.query_private(principal,query)))
             if result is None:
                 return []
             qvec = result[0]
@@ -148,7 +151,7 @@ class VectorMemory:
         return sorted(scored,key=lambda r:(-r['similarity'],r['id']))[:3]
 
     async def index_once(self):
-        docs = [r for r in self.engine.vector_documents() if not PRIVATE.search(r['text'])]
+        docs = [r for r in self.engine.vector_documents() if level(r['text'])<2]
         current = {(r['agent'],r['ns'],r['digest']) for r in docs}
         with self.db:
             for agent,ns,digest,model in self.db.execute('SELECT agent,ns,digest,model FROM vectors').fetchall():
@@ -171,16 +174,21 @@ class VectorMemory:
                     key = (row['agent'],row['ns'],row['digest'])
                     if key in valid:
                         self.db.execute('INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?)',(*key,self.model,self.dim,json.dumps(vector,separators=(',',':'))))
-        await self.request([r['text'] for r in pending], save, 20.)
+        await self.request([r['text'] for r in pending], save, 20.,guard=lambda:{(r['agent'],r['ns'],r['digest']) for r in pending}<={(x['agent'],x['ns'],x['digest']) for x in self.engine.vector_documents()})
 
     async def run(self):
         try:
             await asyncio.sleep(5)
+            last_formal=0.
             while not self.closed:
-                self.wake.clear()
-                try:await self.index_once()
+                woken=self.wake.is_set();self.wake.clear()
+                try:
+                    if woken or self.clock()-last_formal>=max(60,int(self.config.get('embedding_index_interval_seconds',1800))):
+                        await self.index_once();last_formal=self.clock()
+                    archive=getattr(self,'archive_index',None)
+                    if archive:await archive.index_once()
                 except Exception:self.metric('index_failures')
-                try:await asyncio.wait_for(self.wake.wait(), max(60,int(self.config.get('embedding_index_interval_seconds',1800))))
+                try:await asyncio.wait_for(self.wake.wait(), 60 if getattr(self,'archive_index',None) else max(60,int(self.config.get('embedding_index_interval_seconds',1800))))
                 except asyncio.TimeoutError:pass
         except asyncio.CancelledError:pass
 

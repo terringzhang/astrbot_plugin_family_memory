@@ -23,3 +23,18 @@ class UpgradeGuardTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(),before)
     def test_empty_bot_self_id_cannot_grant_a_route(self):
         with self.assertRaises(Rejected):IdentityPolicy(b'fixture',{'bot1_platform':'default','bot1_self_id':''}).resolve('default','','owner')
+
+    def test_unknown_archive_vector_route_rejected_before_identity_key(self):
+        with tempfile.TemporaryDirectory() as t:
+            root=pathlib.Path(t);(root/'index').mkdir();path=root/'index/embedding.sqlite3'
+            db=sqlite3.connect(path);db.execute('create table archive_vectors(agent text)');db.execute('insert into archive_vectors values(?)',('unsupported-old-route',));db.commit();db.close()
+            before=path.read_bytes()
+            with self.assertRaises(Rejected):MemoryEngine(root)
+            self.assertEqual(before,path.read_bytes());self.assertFalse((root/'.identity-key').exists())
+    def test_unknown_debug_label_route_rejected_before_archive_write(self):
+        with tempfile.TemporaryDirectory() as t:
+            root=pathlib.Path(t);path=root/'archive.sqlite3'
+            db=sqlite3.connect(path);db.execute('create table label_signatures(agent text)');db.execute('insert into label_signatures values(?)',('unsupported-old-route',));db.commit();db.close()
+            before=path.read_bytes()
+            with self.assertRaises(Rejected):ConversationArchive(root,b'fixture-key')
+            self.assertEqual(before,path.read_bytes())
